@@ -2,6 +2,7 @@
 #define SKYLANDER_CRYPT_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 /**
  * Skylander encryption/decryption utilities

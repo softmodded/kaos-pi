@@ -2,6 +2,7 @@
 #define USB_GADGET_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 /**
  * USB Gadget Configuration for Skylander Portal Emulation
