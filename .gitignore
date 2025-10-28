@@ -1,0 +1,58 @@
+# Build directories
+build/
+cmake-build-*/
+*.o
+*.a
+*.so
+*.exe
+
+# CMake files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+Makefile
+
+# Compiled binary
+kaos-pi
+
+# Skylander data files (user data)
+skylanders/*.bin
+skylanders/*.dmp
+skylanders/*.dump
+skylanders/*.sky
+
+# Keep the directory but not the files
+!skylanders/.gitkeep
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Log files
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+*.old
+
+# System files
+.directory
+Thumbs.db
+
+# Dependency directories
+lib/
+deps/
+
+# Generated files
+*.d
+.depend
+
+# Debug files
+*.dSYM/
+*.su
