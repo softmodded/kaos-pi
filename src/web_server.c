@@ -4,258 +4,283 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <pthread.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <pthread.h>
 #include <errno.h>
-#include <fcntl.h>
-#include <sys/stat.h>
 #include <ctype.h>
 
-// HTML pages embedded in the binary
+#define WEB_SERVER_MAX_CONNECTIONS 10
+
+// HTML content for the web interface
 static const char* HTML_INDEX = 
 "<!DOCTYPE html>\n"
 "<html>\n"
 "<head>\n"
 "    <meta charset=\"UTF-8\">\n"
 "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
-"    <title>KAOS-Pi Portal Manager</title>\n"
+"    <title>KAOS-Pi Portal Control</title>\n"
 "    <style>\n"
-"        * { margin: 0; padding: 0; box-sizing: border-box; }\n"
+"        * {\n"
+"            margin: 0;\n"
+"            padding: 0;\n"
+"            box-sizing: border-box;\n"
+"        }\n"
+"        \n"
 "        body {\n"
 "            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;\n"
 "            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);\n"
 "            min-height: 100vh;\n"
 "            padding: 20px;\n"
 "        }\n"
+"        \n"
 "        .container {\n"
 "            max-width: 800px;\n"
 "            margin: 0 auto;\n"
-"            background: white;\n"
-"            border-radius: 10px;\n"
-"            box-shadow: 0 10px 40px rgba(0,0,0,0.2);\n"
-"            padding: 30px;\n"
 "        }\n"
-"        h1 {\n"
-"            color: #667eea;\n"
-"            margin-bottom: 10px;\n"
-"            font-size: 2.5em;\n"
-"        }\n"
-"        .subtitle {\n"
-"            color: #666;\n"
-"            margin-bottom: 30px;\n"
-"            font-size: 1.1em;\n"
-"        }\n"
-"        .upload-section {\n"
-"            background: #f7f9fc;\n"
-"            border: 2px dashed #667eea;\n"
-"            border-radius: 8px;\n"
-"            padding: 30px;\n"
+"        \n"
+"        .header {\n"
 "            text-align: center;\n"
+"            color: white;\n"
 "            margin-bottom: 30px;\n"
+"        }\n"
+"        \n"
+"        .header h1 {\n"
+"            font-size: 2.5em;\n"
+"            margin-bottom: 10px;\n"
+"            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);\n"
+"        }\n"
+"        \n"
+"        .header p {\n"
+"            font-size: 1.1em;\n"
+"            opacity: 0.9;\n"
+"        }\n"
+"        \n"
+"        .card {\n"
+"            background: white;\n"
+"            border-radius: 12px;\n"
+"            padding: 25px;\n"
+"            margin-bottom: 20px;\n"
+"            box-shadow: 0 4px 6px rgba(0,0,0,0.1);\n"
+"        }\n"
+"        \n"
+"        .card h2 {\n"
+"            color: #333;\n"
+"            margin-bottom: 15px;\n"
+"            padding-bottom: 10px;\n"
+"            border-bottom: 2px solid #667eea;\n"
+"        }\n"
+"        \n"
+"        .upload-zone {\n"
+"            border: 3px dashed #667eea;\n"
+"            border-radius: 8px;\n"
+"            padding: 40px;\n"
+"            text-align: center;\n"
+"            cursor: pointer;\n"
 "            transition: all 0.3s;\n"
+"            background: #f8f9ff;\n"
 "        }\n"
-"        .upload-section:hover {\n"
-"            background: #eef1f7;\n"
+"        \n"
+"        .upload-zone:hover {\n"
 "            border-color: #764ba2;\n"
+"            background: #f0f1ff;\n"
 "        }\n"
-"        .upload-section.drag-over {\n"
-"            background: #e3f2fd;\n"
-"            border-color: #2196f3;\n"
+"        \n"
+"        .upload-zone.drag-over {\n"
+"            border-color: #764ba2;\n"
+"            background: #e8e9ff;\n"
 "        }\n"
+"        \n"
 "        input[type=\"file\"] {\n"
 "            display: none;\n"
 "        }\n"
-"        .upload-btn {\n"
-"            background: #667eea;\n"
-"            color: white;\n"
-"            padding: 12px 30px;\n"
+"        \n"
+"        .btn {\n"
+"            padding: 10px 20px;\n"
 "            border: none;\n"
-"            border-radius: 5px;\n"
+"            border-radius: 6px;\n"
 "            cursor: pointer;\n"
-"            font-size: 16px;\n"
+"            font-size: 14px;\n"
+"            font-weight: 600;\n"
 "            transition: all 0.3s;\n"
 "        }\n"
-"        .upload-btn:hover {\n"
-"            background: #764ba2;\n"
-"            transform: translateY(-2px);\n"
-"            box-shadow: 0 5px 15px rgba(0,0,0,0.2);\n"
+"        \n"
+"        .btn-load {\n"
+"            background: #667eea;\n"
+"            color: white;\n"
+"            margin-right: 5px;\n"
 "        }\n"
-"        .file-list {\n"
-"            margin-top: 20px;\n"
+"        \n"
+"        .btn-load:hover {\n"
+"            background: #5568d3;\n"
 "        }\n"
+"        \n"
+"        .btn-delete {\n"
+"            background: #ef4444;\n"
+"            color: white;\n"
+"        }\n"
+"        \n"
+"        .btn-delete:hover {\n"
+"            background: #dc2626;\n"
+"        }\n"
+"        \n"
 "        .file-item {\n"
-"            background: white;\n"
-"            border: 1px solid #e0e0e0;\n"
-"            border-radius: 5px;\n"
-"            padding: 15px;\n"
-"            margin-bottom: 10px;\n"
 "            display: flex;\n"
 "            justify-content: space-between;\n"
 "            align-items: center;\n"
+"            padding: 15px;\n"
+"            margin: 10px 0;\n"
+"            background: #f8f9fa;\n"
+"            border-radius: 8px;\n"
 "            transition: all 0.3s;\n"
 "        }\n"
+"        \n"
 "        .file-item:hover {\n"
-"            box-shadow: 0 3px 10px rgba(0,0,0,0.1);\n"
+"            background: #e9ecef;\n"
+"            transform: translateX(5px);\n"
 "        }\n"
+"        \n"
 "        .file-name {\n"
 "            font-weight: 500;\n"
 "            color: #333;\n"
 "        }\n"
+"        \n"
 "        .file-actions {\n"
 "            display: flex;\n"
-"            gap: 10px;\n"
+"            gap: 5px;\n"
 "        }\n"
-"        .btn {\n"
-"            padding: 8px 15px;\n"
-"            border: none;\n"
-"            border-radius: 4px;\n"
-"            cursor: pointer;\n"
-"            font-size: 14px;\n"
+"        \n"
+"        .slots {\n"
+"            display: flex;\n"
+"            gap: 20px;\n"
+"            margin-top: 20px;\n"
+"        }\n"
+"        \n"
+"        .slot {\n"
+"            flex: 1;\n"
+"            padding: 20px;\n"
+"            background: #f8f9fa;\n"
+"            border-radius: 8px;\n"
+"            border: 3px solid #dee2e6;\n"
 "            transition: all 0.3s;\n"
 "        }\n"
-"        .btn-load {\n"
-"            background: #4caf50;\n"
-"            color: white;\n"
-"        }\n"
-"        .btn-load:hover {\n"
-"            background: #45a049;\n"
-"        }\n"
-"        .btn-delete {\n"
-"            background: #f44336;\n"
-"            color: white;\n"
-"        }\n"
-"        .btn-delete:hover {\n"
-"            background: #da190b;\n"
-"        }\n"
-"        .status {\n"
-"            background: #e8f5e9;\n"
-"            border-left: 4px solid #4caf50;\n"
-"            padding: 15px;\n"
-"            margin-bottom: 20px;\n"
-"            border-radius: 4px;\n"
-"        }\n"
-"        .status.error {\n"
-"            background: #ffebee;\n"
-"            border-left-color: #f44336;\n"
-"        }\n"
-"        .portal-status {\n"
-"            background: #fff3e0;\n"
-"            border-left: 4px solid #ff9800;\n"
-"            padding: 15px;\n"
-"            margin-bottom: 20px;\n"
-"            border-radius: 4px;\n"
-"        }\n"
-"        .slots {\n"
-"            display: grid;\n"
-"            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));\n"
-"            gap: 10px;\n"
-"            margin-top: 15px;\n"
-"        }\n"
-"        .slot {\n"
-"            background: #f5f5f5;\n"
-"            padding: 10px;\n"
-"            border-radius: 5px;\n"
-"            text-align: center;\n"
-"            border: 2px solid transparent;\n"
-"        }\n"
+"        \n"
 "        .slot.active {\n"
-"            background: #e8f5e9;\n"
-"            border-color: #4caf50;\n"
+"            background: #d4edda;\n"
+"            border-color: #28a745;\n"
 "        }\n"
+"        \n"
 "        .slot-label {\n"
-"            font-size: 12px;\n"
-"            color: #666;\n"
-"            margin-bottom: 5px;\n"
+"            font-weight: bold;\n"
+"            color: #667eea;\n"
+"            margin-bottom: 10px;\n"
 "        }\n"
+"        \n"
 "        .slot-name {\n"
-"            font-weight: 500;\n"
+"            color: #666;\n"
 "            font-size: 14px;\n"
-"            color: #333;\n"
+"        }\n"
+"        \n"
+"        .status {\n"
+"            padding: 10px;\n"
+"            margin-top: 15px;\n"
+"            border-radius: 6px;\n"
+"            text-align: center;\n"
+"            font-weight: 500;\n"
+"            display: none;\n"
+"        }\n"
+"        \n"
+"        .status.show {\n"
+"            display: block;\n"
+"        }\n"
+"        \n"
+"        .status.success {\n"
+"            background: #d4edda;\n"
+"            color: #155724;\n"
+"        }\n"
+"        \n"
+"        .status.error {\n"
+"            background: #f8d7da;\n"
+"            color: #721c24;\n"
 "        }\n"
 "    </style>\n"
 "</head>\n"
 "<body>\n"
 "    <div class=\"container\">\n"
-"        <h1>🎮 KAOS-Pi Portal Manager</h1>\n"
-"        <p class=\"subtitle\">Skylander Portal Emulator for Raspberry Pi</p>\n"
-"        \n"
-"        <div id=\"statusMsg\" style=\"display:none;\"></div>\n"
-"        \n"
-"        <div class=\"portal-status\">\n"
-"            <h3>Portal Status</h3>\n"
-"            <p><strong>State:</strong> <span id=\"portalState\">Connected</span></p>\n"
-"            <div class=\"slots\" id=\"slotsContainer\"></div>\n"
+"        <div class=\"header\">\n"
+"            <h1>🎮 KAOS-Pi Portal</h1>\n"
+"            <p>Skylander Portal Emulator</p>\n"
 "        </div>\n"
 "        \n"
-"        <div class=\"upload-section\" id=\"dropZone\">\n"
-"            <h2>📤 Upload Skylander Files</h2>\n"
-"            <p style=\"margin: 15px 0; color: #666;\">Drag & drop files here or click to browse</p>\n"
-"            <p style=\"margin-bottom: 15px; font-size: 14px; color: #999;\">Supported: .bin, .dmp, .dump, .sky</p>\n"
-"            <input type=\"file\" id=\"fileInput\" multiple accept=\".bin,.dmp,.dump,.sky\">\n"
-"            <button class=\"upload-btn\" onclick=\"document.getElementById('fileInput').click()\">Choose Files</button>\n"
+"        <div class=\"card\">\n"
+"            <h2>Portal Status</h2>\n"
+"            <div class=\"slots\" id=\"slotsContainer\">\n"
+"                <div class=\"slot\">\n"
+"                    <div class=\"slot-label\">Slot 1</div>\n"
+"                    <div class=\"slot-name\">Empty</div>\n"
+"                </div>\n"
+"                <div class=\"slot\">\n"
+"                    <div class=\"slot-label\">Slot 2</div>\n"
+"                    <div class=\"slot-name\">Empty</div>\n"
+"                </div>\n"
+"            </div>\n"
 "        </div>\n"
 "        \n"
-"        <div class=\"file-list\">\n"
-"            <h2>📁 Available Skylanders</h2>\n"
-"            <div id=\"fileListContainer\">Loading...</div>\n"
+"        <div class=\"card\">\n"
+"            <h2>Upload Skylander</h2>\n"
+"            <div class=\"upload-zone\" id=\"uploadZone\">\n"
+"                <input type=\"file\" id=\"fileInput\" accept=\".bin,.dmp,.dump,.sky\" multiple>\n"
+"                <p style=\"font-size: 18px; color: #667eea; margin-bottom: 10px;\">📁 Drop files here or click to browse</p>\n"
+"                <p style=\"color: #666; font-size: 14px;\">Supported: .bin, .dmp, .dump, .sky (1024 bytes)</p>\n"
+"            </div>\n"
+"            <div id=\"statusMessage\" class=\"status\"></div>\n"
+"        </div>\n"
+"        \n"
+"        <div class=\"card\">\n"
+"            <h2>Available Skylanders</h2>\n"
+"            <div id=\"fileListContainer\">\n"
+"                <p style=\"color: #999; padding: 20px; text-align: center;\">Loading...</p>\n"
+"            </div>\n"
 "        </div>\n"
 "    </div>\n"
 "    \n"
 "    <script>\n"
-"        const dropZone = document.getElementById('dropZone');\n"
+"        const uploadZone = document.getElementById('uploadZone');\n"
 "        const fileInput = document.getElementById('fileInput');\n"
 "        \n"
-"        // Prevent default drag behaviors\n"
-"        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {\n"
-"            dropZone.addEventListener(eventName, preventDefaults, false);\n"
-"            document.body.addEventListener(eventName, preventDefaults, false);\n"
-"        });\n"
+"        uploadZone.addEventListener('click', () => fileInput.click());\n"
 "        \n"
-"        function preventDefaults(e) {\n"
+"        uploadZone.addEventListener('dragover', (e) => {\n"
 "            e.preventDefault();\n"
-"            e.stopPropagation();\n"
-"        }\n"
-"        \n"
-"        // Highlight drop zone when dragging over it\n"
-"        ['dragenter', 'dragover'].forEach(eventName => {\n"
-"            dropZone.addEventListener(eventName, () => {\n"
-"                dropZone.classList.add('drag-over');\n"
-"            }, false);\n"
+"            uploadZone.classList.add('drag-over');\n"
 "        });\n"
 "        \n"
-"        ['dragleave', 'drop'].forEach(eventName => {\n"
-"            dropZone.addEventListener(eventName, () => {\n"
-"                dropZone.classList.remove('drag-over');\n"
-"            }, false);\n"
+"        uploadZone.addEventListener('dragleave', () => {\n"
+"            uploadZone.classList.remove('drag-over');\n"
 "        });\n"
 "        \n"
-"        // Handle dropped files\n"
-"        dropZone.addEventListener('drop', (e) => {\n"
-"            const files = e.dataTransfer.files;\n"
-"            handleFiles(files);\n"
-"        }, false);\n"
+"        uploadZone.addEventListener('drop', (e) => {\n"
+"            e.preventDefault();\n"
+"            uploadZone.classList.remove('drag-over');\n"
+"            handleFiles(e.dataTransfer.files);\n"
+"        });\n"
 "        \n"
-"        // Handle selected files\n"
 "        fileInput.addEventListener('change', (e) => {\n"
 "            handleFiles(e.target.files);\n"
 "        });\n"
-"        \n"
-"        function showStatus(message, isError = false) {\n"
-"            const statusMsg = document.getElementById('statusMsg');\n"
-"            statusMsg.textContent = message;\n"
-"            statusMsg.className = isError ? 'status error' : 'status';\n"
-"            statusMsg.style.display = 'block';\n"
-"            setTimeout(() => {\n"
-"                statusMsg.style.display = 'none';\n"
-"            }, 5000);\n"
-"        }\n"
 "        \n"
 "        function handleFiles(files) {\n"
 "            for (let file of files) {\n"
 "                uploadFile(file);\n"
 "            }\n"
+"        }\n"
+"        \n"
+"        function showStatus(message, isError = false) {\n"
+"            const status = document.getElementById('statusMessage');\n"
+"            status.textContent = message;\n"
+"            status.className = 'status show ' + (isError ? 'error' : 'success');\n"
+"            setTimeout(() => status.classList.remove('show'), 3000);\n"
 "        }\n"
 "        \n"
 "        function uploadFile(file) {\n"
@@ -379,7 +404,7 @@ static void url_decode(char* dst, const char* src) {
             *dst++ = *src++;
         }
     }
-    *dst++ = '\0';
+    *dst = '\0';
 }
 
 /**
@@ -388,23 +413,28 @@ static void url_decode(char* dst, const char* src) {
 static char* get_query_param(const char* query, const char* param) {
     if (!query || !param) return NULL;
     
-    char* search = (char*)malloc(strlen(param) + 2);
-    sprintf(search, "%s=", param);
+    char search[256];
+    snprintf(search, sizeof(search), "%s=", param);
     
-    char* pos = strstr(query, search);
-    free(search);
-    
+    const char* pos = strstr(query, search);
     if (!pos) return NULL;
     
-    pos += strlen(param) + 1;
-    char* end = strchr(pos, '&');
-    size_t len = end ? (end - pos) : strlen(pos);
+    pos += strlen(search);
+    const char* end = strchr(pos, '&');
+    size_t len = end ? (size_t)(end - pos) : strlen(pos);
     
-    char* value = (char*)malloc(len + 1);
+    char* value = malloc(len + 1);
+    if (!value) return NULL;
+    
     strncpy(value, pos, len);
     value[len] = '\0';
     
-    char* decoded = (char*)malloc(len + 1);
+    char* decoded = malloc(len + 1);
+    if (!decoded) {
+        free(value);
+        return NULL;
+    }
+    
     url_decode(decoded, value);
     free(value);
     
@@ -414,18 +444,19 @@ static char* get_query_param(const char* query, const char* param) {
 /**
  * Send HTTP response
  */
-static void send_response(int client_fd, int code, const char* status, 
+static void send_response(int client_fd, int status_code, const char* status_text,
                          const char* content_type, const char* body) {
-    char header[1024];
-    int body_len = body ? strlen(body) : 0;
+    char header[2048];
+    size_t body_len = body ? strlen(body) : 0;
     
     snprintf(header, sizeof(header),
         "HTTP/1.1 %d %s\r\n"
         "Content-Type: %s\r\n"
-        "Content-Length: %d\r\n"
+        "Content-Length: %zu\r\n"
         "Connection: close\r\n"
+        "Access-Control-Allow-Origin: *\r\n"
         "\r\n",
-        code, status, content_type, body_len);
+        status_code, status_text, content_type, body_len);
     
     write(client_fd, header, strlen(header));
     if (body) {
@@ -436,19 +467,47 @@ static void send_response(int client_fd, int code, const char* status,
 /**
  * Handle file upload
  */
-static void handle_upload(web_server_t* server, int client_fd, const char* body, size_t body_len) {
-    // Parse multipart/form-data
-    const char* boundary_start = strstr(body, "boundary=");
-    if (!boundary_start) {
-        send_response(client_fd, 400, "Bad Request", "text/plain", "Invalid upload");
+static void handle_upload(web_server_t* server, int client_fd, const char* headers, size_t total_len) {
+    printf("Upload request received, total length: %zu\n", total_len);
+    
+    // Find Content-Type header to get boundary
+    const char* content_type = strstr(headers, "Content-Type:");
+    if (!content_type) {
+        printf("ERROR: No Content-Type header found\n");
+        send_response(client_fd, 400, "Bad Request", "text/plain", "No Content-Type");
         return;
     }
     
-    // Extract boundary
-    char boundary[128];
-    sscanf(boundary_start, "boundary=%s", boundary);
+    const char* boundary_start = strstr(content_type, "boundary=");
+    if (!boundary_start) {
+        printf("ERROR: No boundary found in Content-Type\n");
+        send_response(client_fd, 400, "Bad Request", "text/plain", "No boundary in Content-Type");
+        return;
+    }
     
-    // Find filename
+    // Extract boundary (skip "boundary=")
+    boundary_start += 9;
+    char boundary[128];
+    size_t i = 0;
+    while (i < sizeof(boundary) - 1 && boundary_start[i] && 
+           boundary_start[i] != '\r' && boundary_start[i] != '\n' && 
+           boundary_start[i] != ';' && boundary_start[i] != ' ') {
+        boundary[i] = boundary_start[i];
+        i++;
+    }
+    boundary[i] = '\0';
+    printf("Boundary: [%s]\n", boundary);
+    
+    // Find the body (after headers)
+    const char* body = strstr(headers, "\r\n\r\n");
+    if (!body) {
+        printf("ERROR: No body separator found\n");
+        send_response(client_fd, 400, "Bad Request", "text/plain", "No body separator");
+        return;
+    }
+    body += 4;
+    
+    // Find filename in body
     const char* filename_start = strstr(body, "filename=\"");
     if (!filename_start) {
         printf("ERROR: No filename found in body\n");
@@ -468,21 +527,43 @@ static void handle_upload(web_server_t* server, int client_fd, const char* body,
     if (name_len >= sizeof(filename)) name_len = sizeof(filename) - 1;
     strncpy(filename, filename_start, name_len);
     filename[name_len] = '\0';
-    printf("Filename: %s\n", filename);
+    printf("Filename: [%s]\n", filename);
     
-    // Find file data (after Content-Type line and blank line)
+    // Find file data (after Content-Type line and blank line in the part)
     const char* data_start = strstr(filename_end, "\r\n\r\n");
     if (!data_start) {
+        printf("ERROR: No data separator found after filename\n");
         send_response(client_fd, 400, "Bad Request", "text/plain", "No data separator");
         return;
     }
     data_start += 4;
     
-    // Find end of data (boundary)
-    char boundary_end[128];
-    snprintf(boundary_end, sizeof(boundary_end), "\r\n--%s", boundary);
-    const char* data_end = strstr(data_start, boundary_end);
+    // Find end boundary - try multiple formats
+    const char* data_end = NULL;
+    char boundary_end[256];
+    
+    // Try format: \r\n--boundary--
+    snprintf(boundary_end, sizeof(boundary_end), "\r\n--%s--", boundary);
+    data_end = strstr(data_start, boundary_end);
+    
+    // Try format: \r\n--boundary
     if (!data_end) {
+        snprintf(boundary_end, sizeof(boundary_end), "\r\n--%s", boundary);
+        data_end = strstr(data_start, boundary_end);
+    }
+    
+    // Try format: --boundary (without \r\n)
+    if (!data_end) {
+        snprintf(boundary_end, sizeof(boundary_end), "--%s", boundary);
+        data_end = strstr(data_start, boundary_end);
+    }
+    
+    if (!data_end) {
+        printf("ERROR: No end boundary found\n");
+        printf("Looking for boundary: [%s]\n", boundary);
+        printf("Data starts at offset: %ld\n", data_start - headers);
+        printf("First 200 chars of data:\n%.200s\n", data_start);
+        printf("Last 200 chars of request:\n%.200s\n", headers + total_len - 200);
         send_response(client_fd, 400, "Bad Request", "text/plain", "No end boundary");
         return;
     }
@@ -548,7 +629,7 @@ static void handle_list(web_server_t* server, int client_fd) {
 }
 
 /**
- * Handle load skylander request
+ * Handle Skylander load request
  */
 static void handle_load(web_server_t* server, int client_fd, const char* query) {
     char* filename = get_query_param(query, "file");
@@ -556,25 +637,31 @@ static void handle_load(web_server_t* server, int client_fd, const char* query) 
     
     if (!filename || !slot_str) {
         send_response(client_fd, 400, "Bad Request", "text/plain", "Missing parameters");
-        if (filename) free(filename);
-        if (slot_str) free(slot_str);
+        free(filename);
+        free(slot_str);
         return;
     }
     
     int slot = atoi(slot_str);
+    free(slot_str);
+    
+    if (slot < 0 || slot >= 2) {
+        send_response(client_fd, 400, "Bad Request", "text/plain", "Invalid slot");
+        free(filename);
+        return;
+    }
     
     if (portal_load_skylander(server->portal, slot, filename) == 0) {
-        send_response(client_fd, 200, "OK", "text/plain", "Loaded");
+        send_response(client_fd, 200, "OK", "text/plain", "Loaded successfully");
     } else {
         send_response(client_fd, 500, "Internal Server Error", "text/plain", "Load failed");
     }
     
     free(filename);
-    free(slot_str);
 }
 
 /**
- * Handle delete file request
+ * Handle file delete request
  */
 static void handle_delete(web_server_t* server, int client_fd, const char* query) {
     char* filename = get_query_param(query, "file");
@@ -585,10 +672,10 @@ static void handle_delete(web_server_t* server, int client_fd, const char* query
     }
     
     char filepath[512];
-    snprintf(filepath, sizeof(filepath), "./skylanders/%s", filename);
+    snprintf(filepath, sizeof(filepath), "/var/lib/kaos-pi/skylanders/%s", filename);
     
     if (unlink(filepath) == 0) {
-        send_response(client_fd, 200, "OK", "text/plain", "Deleted");
+        send_response(client_fd, 200, "OK", "text/plain", "Deleted successfully");
     } else {
         send_response(client_fd, 500, "Internal Server Error", "text/plain", "Delete failed");
     }
@@ -804,7 +891,7 @@ int web_server_start(web_server_t* server) {
     
     pthread_detach(thread);
     
-    printf("Web server started on http://0.0.0.0:%d\n", server->port);
+    printf("Web server started on port %d\n", server->port);
     return 0;
 }
 
@@ -817,31 +904,9 @@ void web_server_stop(web_server_t* server) {
     server->running = 0;
     
     if (server->socket_fd >= 0) {
-        shutdown(server->socket_fd, SHUT_RDWR);
-    }
-    
-    printf("Web server stopped\n");
-}
-
-/**
- * Cleanup web server resources
- */
-void web_server_cleanup(web_server_t* server) {
-    if (!server) return;
-    
-    web_server_stop(server);
-    
-    if (server->socket_fd >= 0) {
         close(server->socket_fd);
         server->socket_fd = -1;
     }
     
-    printf("Web server cleaned up\n");
-}
-
-/**
- * Check if server is running
- */
-int web_server_is_running(web_server_t* server) {
-    return server && server->running;
+    printf("Web server stopped\n");
 }
