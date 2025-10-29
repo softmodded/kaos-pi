@@ -437,15 +437,19 @@ static void send_response(int client_fd, int code, const char* status,
  * Handle file upload
  */
 static void handle_upload(web_server_t* server, int client_fd, const char* headers, size_t total_len) {
+    printf("Upload request received, total length: %zu\n", total_len);
+    
     // Find Content-Type header to get boundary
     const char* content_type = strstr(headers, "Content-Type:");
     if (!content_type) {
+        printf("ERROR: No Content-Type header found\n");
         send_response(client_fd, 400, "Bad Request", "text/plain", "No Content-Type");
         return;
     }
     
     const char* boundary_start = strstr(content_type, "boundary=");
     if (!boundary_start) {
+        printf("ERROR: No boundary found in Content-Type\n");
         send_response(client_fd, 400, "Bad Request", "text/plain", "No boundary in Content-Type");
         return;
     }
@@ -459,10 +463,12 @@ static void handle_upload(web_server_t* server, int client_fd, const char* heade
         i++;
     }
     boundary[i] = '\0';
+    printf("Boundary: %s\n", boundary);
     
     // Find the body (after headers)
     const char* body = strstr(headers, "\r\n\r\n");
     if (!body) {
+        printf("ERROR: No body separator found\n");
         send_response(client_fd, 400, "Bad Request", "text/plain", "No body separator");
         return;
     }
@@ -471,6 +477,7 @@ static void handle_upload(web_server_t* server, int client_fd, const char* heade
     // Find filename in body
     const char* filename_start = strstr(body, "filename=\"");
     if (!filename_start) {
+        printf("ERROR: No filename found in body\n");
         send_response(client_fd, 400, "Bad Request", "text/plain", "No filename in upload");
         return;
     }
@@ -487,6 +494,7 @@ static void handle_upload(web_server_t* server, int client_fd, const char* heade
     if (name_len >= sizeof(filename)) name_len = sizeof(filename) - 1;
     strncpy(filename, filename_start, name_len);
     filename[name_len] = '\0';
+    printf("Filename: %s\n", filename);
     
     // Find file data (after Content-Type line and blank line)
     const char* data_start = strstr(filename_end, "\r\n\r\n");
@@ -506,11 +514,13 @@ static void handle_upload(web_server_t* server, int client_fd, const char* heade
     }
     
     size_t data_len = data_end - data_start;
+    printf("File data length: %zu bytes\n", data_len);
     
     // Validate file size (should be 1024 bytes for Skylanders)
     if (data_len != 1024) {
         char err_msg[128];
         snprintf(err_msg, sizeof(err_msg), "Invalid file size: %zu bytes (expected 1024)", data_len);
+        printf("ERROR: %s\n", err_msg);
         send_response(client_fd, 400, "Bad Request", "text/plain", err_msg);
         return;
     }
@@ -519,9 +529,11 @@ static void handle_upload(web_server_t* server, int client_fd, const char* heade
     char filepath[512];
     snprintf(filepath, sizeof(filepath), "/var/lib/kaos-pi/skylanders/%s", filename);
     
+    printf("Saving to: %s\n", filepath);
     FILE* fp = fopen(filepath, "wb");
     if (!fp) {
         perror("Failed to open file for writing");
+        printf("ERROR: Could not open %s for writing\n", filepath);
         send_response(client_fd, 500, "Internal Server Error", "text/plain", "Failed to save file");
         return;
     }
@@ -530,11 +542,12 @@ static void handle_upload(web_server_t* server, int client_fd, const char* heade
     fclose(fp);
     
     if (written != data_len) {
+        printf("ERROR: Only wrote %zu of %zu bytes\n", written, data_len);
         send_response(client_fd, 500, "Internal Server Error", "text/plain", "Failed to write complete file");
         return;
     }
     
-    printf("Uploaded file: %s (%zu bytes)\n", filename, data_len);
+    printf("SUCCESS: Uploaded file: %s (%zu bytes)\n", filename, data_len);
     send_response(client_fd, 200, "OK", "text/plain", "Upload successful");
 }
 
@@ -638,21 +651,58 @@ static void handle_status(web_server_t* server, int client_fd) {
  * Handle a client connection
  */
 void web_server_handle_client(web_server_t* server, int client_fd) {
-    char buffer[16384];
-    ssize_t bytes = read(client_fd, buffer, sizeof(buffer) - 1);
-    
-    if (bytes <= 0) {
+    char* buffer = malloc(65536);  // 64KB buffer for file uploads
+    if (!buffer) {
         close(client_fd);
         return;
     }
     
-    buffer[bytes] = '\0';
+    ssize_t bytes = 0;
+    ssize_t total_bytes = 0;
+    
+    // Read initial chunk to get headers
+    bytes = read(client_fd, buffer, 4096);
+    if (bytes <= 0) {
+        free(buffer);
+        close(client_fd);
+        return;
+    }
+    total_bytes = bytes;
+    buffer[total_bytes] = '\0';
     
     // Parse request line
     char method[16], path[256], version[16];
     sscanf(buffer, "%s %s %s", method, path, version);
     
     printf("Request: %s %s\n", method, path);
+    
+    // For POST requests, check Content-Length and read full body
+    if (strcmp(method, "POST") == 0) {
+        const char* content_length_str = strstr(buffer, "Content-Length:");
+        if (content_length_str) {
+            int content_length = 0;
+            sscanf(content_length_str, "Content-Length: %d", &content_length);
+            
+            // Find end of headers
+            const char* body_start = strstr(buffer, "\r\n\r\n");
+            if (body_start) {
+                body_start += 4;
+                int headers_len = body_start - buffer;
+                int body_received = total_bytes - headers_len;
+                int body_remaining = content_length - body_received;
+                
+                // Read remaining body data
+                while (body_remaining > 0 && total_bytes < 65535) {
+                    bytes = read(client_fd, buffer + total_bytes, 
+                                body_remaining < (65536 - total_bytes - 1) ? body_remaining : (65536 - total_bytes - 1));
+                    if (bytes <= 0) break;
+                    total_bytes += bytes;
+                    body_remaining -= bytes;
+                }
+                buffer[total_bytes] = '\0';
+            }
+        }
+    }
     
     // Extract query string
     char* query = strchr(path, '?');
@@ -666,7 +716,7 @@ void web_server_handle_client(web_server_t* server, int client_fd) {
         send_response(client_fd, 200, "OK", "text/html", HTML_INDEX);
     }
     else if (strcmp(path, "/upload") == 0 && strcmp(method, "POST") == 0) {
-        handle_upload(server, client_fd, buffer, bytes);
+        handle_upload(server, client_fd, buffer, total_bytes);
     }
     else if (strcmp(path, "/list") == 0) {
         handle_list(server, client_fd);
@@ -684,6 +734,7 @@ void web_server_handle_client(web_server_t* server, int client_fd) {
         send_response(client_fd, 404, "Not Found", "text/plain", "Not found");
     }
     
+    free(buffer);
     close(client_fd);
 }
 
