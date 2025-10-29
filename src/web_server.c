@@ -436,29 +436,49 @@ static void send_response(int client_fd, int code, const char* status,
 /**
  * Handle file upload
  */
-static void handle_upload(web_server_t* server, int client_fd, const char* body, size_t body_len) {
-    // Parse multipart/form-data
-    const char* boundary_start = strstr(body, "boundary=");
-    if (!boundary_start) {
-        send_response(client_fd, 400, "Bad Request", "text/plain", "Invalid upload");
+static void handle_upload(web_server_t* server, int client_fd, const char* headers, size_t total_len) {
+    // Find Content-Type header to get boundary
+    const char* content_type = strstr(headers, "Content-Type:");
+    if (!content_type) {
+        send_response(client_fd, 400, "Bad Request", "text/plain", "No Content-Type");
         return;
     }
     
-    // Extract boundary
-    char boundary[128];
-    sscanf(boundary_start, "boundary=%s", boundary);
+    const char* boundary_start = strstr(content_type, "boundary=");
+    if (!boundary_start) {
+        send_response(client_fd, 400, "Bad Request", "text/plain", "No boundary in Content-Type");
+        return;
+    }
     
-    // Find filename
+    // Extract boundary (skip "boundary=")
+    boundary_start += 9;
+    char boundary[128];
+    size_t i = 0;
+    while (i < sizeof(boundary) - 1 && boundary_start[i] && boundary_start[i] != '\r' && boundary_start[i] != '\n' && boundary_start[i] != ';') {
+        boundary[i] = boundary_start[i];
+        i++;
+    }
+    boundary[i] = '\0';
+    
+    // Find the body (after headers)
+    const char* body = strstr(headers, "\r\n\r\n");
+    if (!body) {
+        send_response(client_fd, 400, "Bad Request", "text/plain", "No body separator");
+        return;
+    }
+    body += 4;
+    
+    // Find filename in body
     const char* filename_start = strstr(body, "filename=\"");
     if (!filename_start) {
-        send_response(client_fd, 400, "Bad Request", "text/plain", "No filename");
+        send_response(client_fd, 400, "Bad Request", "text/plain", "No filename in upload");
         return;
     }
     
     filename_start += 10;
     const char* filename_end = strchr(filename_start, '"');
     if (!filename_end) {
-        send_response(client_fd, 400, "Bad Request", "text/plain", "Invalid filename");
+        send_response(client_fd, 400, "Bad Request", "text/plain", "Invalid filename format");
         return;
     }
     
@@ -468,37 +488,51 @@ static void handle_upload(web_server_t* server, int client_fd, const char* body,
     strncpy(filename, filename_start, name_len);
     filename[name_len] = '\0';
     
-    // Find file data
+    // Find file data (after Content-Type line and blank line)
     const char* data_start = strstr(filename_end, "\r\n\r\n");
     if (!data_start) {
-        send_response(client_fd, 400, "Bad Request", "text/plain", "No data");
+        send_response(client_fd, 400, "Bad Request", "text/plain", "No data separator");
         return;
     }
     data_start += 4;
     
-    // Find end of data
+    // Find end of data (boundary)
     char boundary_end[128];
     snprintf(boundary_end, sizeof(boundary_end), "\r\n--%s", boundary);
     const char* data_end = strstr(data_start, boundary_end);
     if (!data_end) {
-        send_response(client_fd, 400, "Bad Request", "text/plain", "Invalid data");
+        send_response(client_fd, 400, "Bad Request", "text/plain", "No end boundary");
         return;
     }
     
     size_t data_len = data_end - data_start;
     
-    // Save file
+    // Validate file size (should be 1024 bytes for Skylanders)
+    if (data_len != 1024) {
+        char err_msg[128];
+        snprintf(err_msg, sizeof(err_msg), "Invalid file size: %zu bytes (expected 1024)", data_len);
+        send_response(client_fd, 400, "Bad Request", "text/plain", err_msg);
+        return;
+    }
+    
+    // Save file to /var/lib/kaos-pi/skylanders/
     char filepath[512];
-    snprintf(filepath, sizeof(filepath), "./skylanders/%s", filename);
+    snprintf(filepath, sizeof(filepath), "/var/lib/kaos-pi/skylanders/%s", filename);
     
     FILE* fp = fopen(filepath, "wb");
     if (!fp) {
+        perror("Failed to open file for writing");
         send_response(client_fd, 500, "Internal Server Error", "text/plain", "Failed to save file");
         return;
     }
     
-    fwrite(data_start, 1, data_len, fp);
+    size_t written = fwrite(data_start, 1, data_len, fp);
     fclose(fp);
+    
+    if (written != data_len) {
+        send_response(client_fd, 500, "Internal Server Error", "text/plain", "Failed to write complete file");
+        return;
+    }
     
     printf("Uploaded file: %s (%zu bytes)\n", filename, data_len);
     send_response(client_fd, 200, "OK", "text/plain", "Upload successful");
@@ -632,13 +666,7 @@ void web_server_handle_client(web_server_t* server, int client_fd) {
         send_response(client_fd, 200, "OK", "text/html", HTML_INDEX);
     }
     else if (strcmp(path, "/upload") == 0 && strcmp(method, "POST") == 0) {
-        const char* body = strstr(buffer, "\r\n\r\n");
-        if (body) {
-            body += 4;
-            handle_upload(server, client_fd, buffer, bytes);
-        } else {
-            send_response(client_fd, 400, "Bad Request", "text/plain", "No body");
-        }
+        handle_upload(server, client_fd, buffer, bytes);
     }
     else if (strcmp(path, "/list") == 0) {
         handle_list(server, client_fd);
