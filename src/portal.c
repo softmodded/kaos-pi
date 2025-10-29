@@ -8,7 +8,7 @@
 #include <unistd.h>
 
 // Skylander storage directory
-#define SKYLANDERS_DIR "./skylanders"
+#define SKYLANDERS_DIR "/var/lib/kaos-pi/skylanders"
 
 /**
  * Initialize the portal

@@ -436,45 +436,19 @@ static void send_response(int client_fd, int code, const char* status,
 /**
  * Handle file upload
  */
-static void handle_upload(web_server_t* server, int client_fd, const char* headers, size_t total_len) {
-    printf("Upload request received, total length: %zu\n", total_len);
-    
-    // Find Content-Type header to get boundary
-    const char* content_type = strstr(headers, "Content-Type:");
-    if (!content_type) {
-        printf("ERROR: No Content-Type header found\n");
-        send_response(client_fd, 400, "Bad Request", "text/plain", "No Content-Type");
-        return;
-    }
-    
-    const char* boundary_start = strstr(content_type, "boundary=");
+static void handle_upload(web_server_t* server, int client_fd, const char* body, size_t body_len) {
+    // Parse multipart/form-data
+    const char* boundary_start = strstr(body, "boundary=");
     if (!boundary_start) {
-        printf("ERROR: No boundary found in Content-Type\n");
-        send_response(client_fd, 400, "Bad Request", "text/plain", "No boundary in Content-Type");
+        send_response(client_fd, 400, "Bad Request", "text/plain", "Invalid upload");
         return;
     }
     
-    // Extract boundary (skip "boundary=")
-    boundary_start += 9;
+    // Extract boundary
     char boundary[128];
-    size_t i = 0;
-    while (i < sizeof(boundary) - 1 && boundary_start[i] && boundary_start[i] != '\r' && boundary_start[i] != '\n' && boundary_start[i] != ';') {
-        boundary[i] = boundary_start[i];
-        i++;
-    }
-    boundary[i] = '\0';
-    printf("Boundary: %s\n", boundary);
+    sscanf(boundary_start, "boundary=%s", boundary);
     
-    // Find the body (after headers)
-    const char* body = strstr(headers, "\r\n\r\n");
-    if (!body) {
-        printf("ERROR: No body separator found\n");
-        send_response(client_fd, 400, "Bad Request", "text/plain", "No body separator");
-        return;
-    }
-    body += 4;
-    
-    // Find filename in body
+    // Find filename
     const char* filename_start = strstr(body, "filename=\"");
     if (!filename_start) {
         printf("ERROR: No filename found in body\n");
@@ -651,58 +625,21 @@ static void handle_status(web_server_t* server, int client_fd) {
  * Handle a client connection
  */
 void web_server_handle_client(web_server_t* server, int client_fd) {
-    char* buffer = malloc(65536);  // 64KB buffer for file uploads
-    if (!buffer) {
-        close(client_fd);
-        return;
-    }
+    char buffer[16384];
+    ssize_t bytes = read(client_fd, buffer, sizeof(buffer) - 1);
     
-    ssize_t bytes = 0;
-    ssize_t total_bytes = 0;
-    
-    // Read initial chunk to get headers
-    bytes = read(client_fd, buffer, 4096);
     if (bytes <= 0) {
-        free(buffer);
         close(client_fd);
         return;
     }
-    total_bytes = bytes;
-    buffer[total_bytes] = '\0';
+    
+    buffer[bytes] = '\0';
     
     // Parse request line
     char method[16], path[256], version[16];
     sscanf(buffer, "%s %s %s", method, path, version);
     
     printf("Request: %s %s\n", method, path);
-    
-    // For POST requests, check Content-Length and read full body
-    if (strcmp(method, "POST") == 0) {
-        const char* content_length_str = strstr(buffer, "Content-Length:");
-        if (content_length_str) {
-            int content_length = 0;
-            sscanf(content_length_str, "Content-Length: %d", &content_length);
-            
-            // Find end of headers
-            const char* body_start = strstr(buffer, "\r\n\r\n");
-            if (body_start) {
-                body_start += 4;
-                int headers_len = body_start - buffer;
-                int body_received = total_bytes - headers_len;
-                int body_remaining = content_length - body_received;
-                
-                // Read remaining body data
-                while (body_remaining > 0 && total_bytes < 65535) {
-                    bytes = read(client_fd, buffer + total_bytes, 
-                                body_remaining < (65536 - total_bytes - 1) ? body_remaining : (65536 - total_bytes - 1));
-                    if (bytes <= 0) break;
-                    total_bytes += bytes;
-                    body_remaining -= bytes;
-                }
-                buffer[total_bytes] = '\0';
-            }
-        }
-    }
     
     // Extract query string
     char* query = strchr(path, '?');
