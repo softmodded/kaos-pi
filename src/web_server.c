@@ -904,9 +904,31 @@ void web_server_stop(web_server_t* server) {
     server->running = 0;
     
     if (server->socket_fd >= 0) {
+        shutdown(server->socket_fd, SHUT_RDWR);
+    }
+    
+    printf("Web server stopped\n");
+}
+
+/**
+ * Cleanup web server resources
+ */
+void web_server_cleanup(web_server_t* server) {
+    if (!server) return;
+    
+    web_server_stop(server);
+    
+    if (server->socket_fd >= 0) {
         close(server->socket_fd);
         server->socket_fd = -1;
     }
     
-    printf("Web server stopped\n");
+    printf("Web server cleaned up\n");
+}
+
+/**
+ * Check if server is running
+ */
+int web_server_is_running(web_server_t* server) {
+    return server && server->running;
 }
