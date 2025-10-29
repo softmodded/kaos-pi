@@ -625,21 +625,58 @@ static void handle_status(web_server_t* server, int client_fd) {
  * Handle a client connection
  */
 void web_server_handle_client(web_server_t* server, int client_fd) {
-    char buffer[16384];
-    ssize_t bytes = read(client_fd, buffer, sizeof(buffer) - 1);
-    
-    if (bytes <= 0) {
+    char* buffer = malloc(65536);  // 64KB buffer for file uploads
+    if (!buffer) {
         close(client_fd);
         return;
     }
     
-    buffer[bytes] = '\0';
+    ssize_t bytes = 0;
+    ssize_t total_bytes = 0;
+    
+    // Read initial chunk to get headers
+    bytes = read(client_fd, buffer, 4096);
+    if (bytes <= 0) {
+        free(buffer);
+        close(client_fd);
+        return;
+    }
+    total_bytes = bytes;
+    buffer[total_bytes] = '\0';
     
     // Parse request line
     char method[16], path[256], version[16];
     sscanf(buffer, "%s %s %s", method, path, version);
     
     printf("Request: %s %s\n", method, path);
+    
+    // For POST requests, check Content-Length and read full body
+    if (strcmp(method, "POST") == 0) {
+        const char* content_length_str = strstr(buffer, "Content-Length:");
+        if (content_length_str) {
+            int content_length = 0;
+            sscanf(content_length_str, "Content-Length: %d", &content_length);
+            
+            // Find end of headers
+            const char* body_start = strstr(buffer, "\r\n\r\n");
+            if (body_start) {
+                body_start += 4;
+                int headers_len = body_start - buffer;
+                int body_received = total_bytes - headers_len;
+                int body_remaining = content_length - body_received;
+                
+                // Read remaining body data
+                while (body_remaining > 0 && total_bytes < 65535) {
+                    bytes = read(client_fd, buffer + total_bytes, 
+                                body_remaining < (65536 - total_bytes - 1) ? body_remaining : (65536 - total_bytes - 1));
+                    if (bytes <= 0) break;
+                    total_bytes += bytes;
+                    body_remaining -= bytes;
+                }
+                buffer[total_bytes] = '\0';
+            }
+        }
+    }
     
     // Extract query string
     char* query = strchr(path, '?');
